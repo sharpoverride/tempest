@@ -42,21 +42,11 @@ export const LEVELS: LevelConfig[] = [
     name: "AMBER CLOVER",
     sides: 40,
     color: 0xffaa00,
-    enemySpawnRate: 0.045,
-    enemySpeed: 0.18,
+    enemySpawnRate: 0.028, // Reduced from 0.045 to manage 40 lanes better
+    enemySpeed: 0.15,    // Slightly reduced from 0.18
     shape: 'clover',
     isClosed: true,
     targetKills: 25
-  },
-  {
-    name: "NEON RIDGE",
-    sides: 15,
-    color: 0xaa00ff,
-    enemySpawnRate: 0.05,
-    enemySpeed: 0.2,
-    shape: 'zigzag',
-    isClosed: false,
-    targetKills: 30
   }
 ];
 

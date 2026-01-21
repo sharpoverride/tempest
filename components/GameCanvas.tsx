@@ -24,11 +24,11 @@ const getShapePoint = (lane: number, sides: number, radius: number, level: Level
   let r = radius;
 
   if (level.shape === 'clover') {
-    // Smooth 4-lobed clover
-    r = radius * (0.8 + 0.3 * Math.cos(theta * 4));
+    r = radius * (1.0 + 0.3 * Math.cos(theta * 4));
   } else if (level.shape === 'zigzag') {
     const x = (lane - (sides - 1) / 2) * (radius * 0.5);
-    const zigzagY = (Math.abs((lane % 4) - 2) - 1) * radius * 0.4;
+    const wave = Math.abs((lane % 4) - 2); 
+    const zigzagY = (wave - 1) * radius * 0.4;
     return { x, y: zigzagY };
   }
 
@@ -53,6 +53,7 @@ const GameCanvas: React.FC<GameCanvasProps> = ({
     gameState, 
     levelIndex, 
     lane: 0,
+    laneVelocity: 0,
     enemies: [] as Enemy[],
     bullets: [] as BulletInternal[],
     particles: [] as Particle[],
@@ -60,7 +61,8 @@ const GameCanvas: React.FC<GameCanvasProps> = ({
     superzapperAvailable: true,
     flashIntensity: 0,
     cameraShake: 0,
-    hyperspaceZoom: 1.0
+    hyperspaceZoom: 1.0,
+    currentWorldRotation: Math.PI / 2
   });
 
   useEffect(() => {
@@ -73,9 +75,10 @@ const GameCanvas: React.FC<GameCanvasProps> = ({
     if (stateRef.current.levelIndex !== levelIndex) {
       stateRef.current.levelIndex = levelIndex;
       stateRef.current.superzapperAvailable = true;
-      const config = LEVELS[levelIndex];
+      const config = LEVELS[levelIndex % LEVELS.length];
       stateRef.current.lane = config.isClosed ? 0 : Math.floor(config.sides / 2);
       stateRef.current.hyperspaceZoom = 1.0;
+      stateRef.current.laneVelocity = 0;
     }
   }, [gameState, levelIndex]);
 
@@ -94,7 +97,7 @@ const GameCanvas: React.FC<GameCanvasProps> = ({
     containerRef.current.appendChild(renderer.domElement);
 
     const renderScene = new RenderPass(scene, camera);
-    const bloomPass = new UnrealBloomPass(new THREE.Vector2(width, height), 1.0, 0.4, 0.85);
+    const bloomPass = new UnrealBloomPass(new THREE.Vector2(width, height), 1.5, 0.4, 0.85);
     const composer = new EffectComposer(renderer);
     composer.addPass(renderScene);
     composer.addPass(bloomPass);
@@ -111,7 +114,7 @@ const GameCanvas: React.FC<GameCanvasProps> = ({
     let tubeLines: THREE.LineSegments | null = null;
     const updateLevelVisuals = () => {
       if (tubeLines) levelGroup.remove(tubeLines);
-      const config = LEVELS[stateRef.current.levelIndex];
+      const config = LEVELS[stateRef.current.levelIndex % LEVELS.length];
       const sides = config.sides;
       const geometry = new THREE.BufferGeometry();
       const vertices: number[] = [];
@@ -124,8 +127,8 @@ const GameCanvas: React.FC<GameCanvasProps> = ({
         const p2 = getShapePoint(nextIdx, sides, RADIUS, config);
         
         vertices.push(p1.x, p1.y, 0, p2.x, p2.y, 0);
-        vertices.push(p1.x * 0.1, p1.y * 0.1, -TUBE_LENGTH, p2.x * 0.1, p2.y * 0.1, -TUBE_LENGTH);
         vertices.push(p1.x, p1.y, 0, p1.x * 0.1, p1.y * 0.1, -TUBE_LENGTH);
+        vertices.push(p1.x * 0.1, p1.y * 0.1, -TUBE_LENGTH, p2.x * 0.1, p2.y * 0.1, -TUBE_LENGTH);
         
         if (!config.isClosed && i === sides - 2) {
            vertices.push(p2.x, p2.y, 0, p2.x * 0.1, p2.y * 0.1, -TUBE_LENGTH);
@@ -133,21 +136,22 @@ const GameCanvas: React.FC<GameCanvasProps> = ({
       }
 
       geometry.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3));
-      tubeLines = new THREE.LineSegments(geometry, new THREE.LineBasicMaterial({ color: config.color }));
+      tubeLines = new THREE.LineSegments(geometry, new THREE.LineBasicMaterial({ color: config.color, transparent: true, opacity: 0.8 }));
       levelGroup.add(tubeLines);
     };
 
     updateLevelVisuals();
 
     const playerGroup = new THREE.Group();
+    // V-ARROW SHAPE: Classic Tempest claw pointing toward local (0,0,0) center
     const playerGeo = new THREE.BufferGeometry().setFromPoints([
-      new THREE.Vector3(-1.0, 0, 0),
-      new THREE.Vector3(0, -0.6, 0),
-      new THREE.Vector3(1.0, 0, 0),
-      new THREE.Vector3(0, 0.4, 0),
-      new THREE.Vector3(-1.0, 0, 0)
+      new THREE.Vector3(-1.5, 1.8, 0),  // Wing Left
+      new THREE.Vector3(0, 0, 0),       // Tip (pointing to center)
+      new THREE.Vector3(1.5, 1.8, 0),   // Wing Right
+      new THREE.Vector3(0, 0.9, 0),     // Notch for classic V-look
+      new THREE.Vector3(-1.5, 1.8, 0)   // Close loop
     ]);
-    const playerMesh = new THREE.Line(playerGeo, new THREE.LineBasicMaterial({ color: COLORS.PLAYER }));
+    const playerMesh = new THREE.Line(playerGeo, new THREE.LineBasicMaterial({ color: COLORS.PLAYER, linewidth: 2.5 }));
     playerGroup.add(playerMesh);
     levelGroup.add(playerGroup);
     
@@ -161,14 +165,15 @@ const GameCanvas: React.FC<GameCanvasProps> = ({
     window.addEventListener('keyup', handleKeyUp);
 
     const spawnEnemy = () => {
-      const sides = LEVELS[stateRef.current.levelIndex].sides;
+      const sides = LEVELS[stateRef.current.levelIndex % LEVELS.length].sides;
       const lane = Math.floor(Math.random() * sides);
       const group = new THREE.Group();
       const enemyGeo = new THREE.BufferGeometry().setFromPoints([
-        new THREE.Vector3(-0.6, -0.6, 0),
-        new THREE.Vector3(0.6, -0.6, 0),
-        new THREE.Vector3(0, 0.9, 0),
-        new THREE.Vector3(-0.6, -0.6, 0)
+        new THREE.Vector3(-0.8, 0, 0),
+        new THREE.Vector3(0, 1.1, 0),
+        new THREE.Vector3(0.8, 0, 0),
+        new THREE.Vector3(0, -0.4, 0),
+        new THREE.Vector3(-0.8, 0, 0)
       ]);
       const mesh = new THREE.Line(enemyGeo, new THREE.LineBasicMaterial({ color: COLORS.ENEMY }));
       group.add(mesh);
@@ -178,16 +183,17 @@ const GameCanvas: React.FC<GameCanvasProps> = ({
         type: 'flipper',
         lane,
         depth: 0,
-        speed: LEVELS[stateRef.current.levelIndex].enemySpeed,
+        speed: LEVELS[stateRef.current.levelIndex % LEVELS.length].enemySpeed,
         mesh: group
       });
     };
 
     const spawnBullet = () => {
       const now = Date.now();
-      if (now - stateRef.current.lastShoot < 120) return;
+      // Increased fire rate to 50ms to ensure 100% coverage during full-speed rotation
+      if (now - stateRef.current.lastShoot < 50) return;
       stateRef.current.lastShoot = now;
-      const bulletGeo = new THREE.BoxGeometry(0.2, 0.2, 2.5);
+      const bulletGeo = new THREE.BoxGeometry(0.25, 0.25, 3);
       const bulletMat = new THREE.MeshBasicMaterial({ color: COLORS.BULLET });
       const mesh = new THREE.Mesh(bulletGeo, bulletMat);
       levelGroup.add(mesh);
@@ -229,9 +235,9 @@ const GameCanvas: React.FC<GameCanvasProps> = ({
         stateRef.current.particles.push({
           position: pos.clone(),
           velocity: new THREE.Vector3(
-            (Math.random() - 0.5) * 1.5,
-            (Math.random() - 0.5) * 1.5,
-            (Math.random() - 0.5) * 1.5
+            (Math.random() - 0.5) * 2.0,
+            (Math.random() - 0.5) * 2.0,
+            (Math.random() - 0.5) * 2.0
           ),
           life: 1.0,
           mesh: pMesh
@@ -248,6 +254,7 @@ const GameCanvas: React.FC<GameCanvasProps> = ({
       stateRef.current.particles = [];
       stateRef.current.superzapperAvailable = true;
       stateRef.current.hyperspaceZoom = 1.0;
+      stateRef.current.laneVelocity = 0;
       updateLevelVisuals();
     };
 
@@ -257,7 +264,7 @@ const GameCanvas: React.FC<GameCanvasProps> = ({
 
     const animate = (time: number) => {
       frameId = requestAnimationFrame(animate);
-      const delta = (time - lastTime) / 16;
+      const delta = (time - lastTime) / 16.67;
       lastTime = time;
 
       if (currentLevelIdx !== stateRef.current.levelIndex) {
@@ -266,7 +273,7 @@ const GameCanvas: React.FC<GameCanvasProps> = ({
       }
 
       if (stateRef.current.gameState === GameState.LEVEL_COMPLETE) {
-        stateRef.current.hyperspaceZoom += 0.08 * delta;
+        stateRef.current.hyperspaceZoom += 0.1 * delta;
         levelGroup.scale.set(stateRef.current.hyperspaceZoom, stateRef.current.hyperspaceZoom, stateRef.current.hyperspaceZoom);
         composer.render();
         return;
@@ -279,18 +286,39 @@ const GameCanvas: React.FC<GameCanvasProps> = ({
         return;
       }
 
-      const level = LEVELS[stateRef.current.levelIndex];
+      const level = LEVELS[stateRef.current.levelIndex % LEVELS.length];
       const sides = level.sides;
 
+      // CALIBRATION: maxVel 0.18 + shootCooldown 50ms ensures bullet hit in every lane during sweep
+      const accel = 0.025 * delta;
+      const friction = 0.85;
+      
       if (keys['ArrowLeft'] || keys['KeyA']) {
-        stateRef.current.lane += 0.12 * delta;
-        if (!level.isClosed) stateRef.current.lane = Math.min(sides - 1, stateRef.current.lane);
-        else stateRef.current.lane = (stateRef.current.lane + sides) % sides;
+        stateRef.current.laneVelocity += accel;
+      } else if (keys['ArrowRight'] || keys['KeyD']) {
+        stateRef.current.laneVelocity -= accel;
+      } else {
+        const laneFraction = stateRef.current.lane % 1;
+        const pull = (0.5 - laneFraction) * 0.01 * delta;
+        stateRef.current.laneVelocity += pull;
+        stateRef.current.laneVelocity *= friction;
       }
-      if (keys['ArrowRight'] || keys['KeyD']) {
-        stateRef.current.lane -= 0.12 * delta;
-        if (!level.isClosed) stateRef.current.lane = Math.max(0, stateRef.current.lane);
-        else stateRef.current.lane = (stateRef.current.lane + sides) % sides;
+      
+      const maxVel = 0.18;
+      stateRef.current.laneVelocity = Math.max(-maxVel, Math.min(maxVel, stateRef.current.laneVelocity));
+      
+      stateRef.current.lane += stateRef.current.laneVelocity * delta;
+
+      if (!level.isClosed) {
+        if (stateRef.current.lane < 0) {
+          stateRef.current.lane = 0;
+          stateRef.current.laneVelocity = 0;
+        } else if (stateRef.current.lane > sides - 1.0001) {
+          stateRef.current.lane = sides - 1.0001;
+          stateRef.current.laneVelocity = 0;
+        }
+      } else {
+        stateRef.current.lane = (stateRef.current.lane + sides) % sides;
       }
       
       if (keys['Space']) spawnBullet();
@@ -308,33 +336,39 @@ const GameCanvas: React.FC<GameCanvasProps> = ({
       const playerPos = getShapePoint(currentLanePos, sides, RADIUS, level);
       
       if (level.isClosed) {
-        const playerTheta = (currentLanePos / sides) * Math.PI * 2;
-        const targetRotation = Math.PI / 2 - playerTheta;
+        const targetTheta = (currentLanePos / sides) * Math.PI * 2;
+        const targetRotation = Math.PI / 2 - targetTheta;
         let diff = targetRotation - levelGroup.rotation.z;
         while (diff < -Math.PI) diff += Math.PI * 2;
         while (diff > Math.PI) diff -= Math.PI * 2;
-        levelGroup.rotation.z += diff * 0.1 * delta;
+        levelGroup.rotation.z += diff * 0.03 * delta;
       } else {
-        levelGroup.rotation.z = THREE.MathUtils.lerp(levelGroup.rotation.z, 0, 0.1 * delta);
+        levelGroup.rotation.z = THREE.MathUtils.lerp(levelGroup.rotation.z, 0, 0.02 * delta); 
       }
       
-      playerGroup.position.set(playerPos.x, playerPos.y, 0);
       const deltaL = 0.001;
       const p1 = getShapePoint(currentLanePos - deltaL, sides, RADIUS, level);
       const p2 = getShapePoint(currentLanePos + deltaL, sides, RADIUS, level);
       const surfaceAngle = Math.atan2(p2.y - p1.y, p2.x - p1.x);
-      playerGroup.rotation.z = surfaceAngle + Math.PI / 2;
+      
+      playerGroup.position.set(playerPos.x, playerPos.y, 0);
+      
+      // Orientation: Pointing inward + Banking
+      const bankFactor = stateRef.current.laneVelocity * 1.5;
+      playerGroup.rotation.z = surfaceAngle - Math.PI / 2 + bankFactor;
 
       if (Math.random() < level.enemySpawnRate) spawnEnemy();
 
       if (stateRef.current.flashIntensity > 0) {
         stateRef.current.flashIntensity -= 0.04 * delta;
         flashMat.opacity = stateRef.current.flashIntensity;
+      } else {
+        flashMat.opacity = 0;
       }
 
       for (let i = stateRef.current.enemies.length - 1; i >= 0; i--) {
         const enemy = stateRef.current.enemies[i];
-        enemy.depth += 0.003 * delta * (1 + enemy.speed);
+        enemy.depth += 0.0035 * delta * (1 + enemy.speed);
         
         if (enemy.mesh) {
           const ePos = getShapePoint(enemy.lane + 0.5, sides, RADIUS, level);
@@ -348,9 +382,9 @@ const GameCanvas: React.FC<GameCanvasProps> = ({
           enemy.mesh.rotation.z = eAngle + Math.PI / 2;
           
           if (enemy.depth > 0.8) {
-            const pulse = Math.sin(time * 0.01) * 0.5 + 0.5;
+            const pulse = Math.sin(time * 0.015) * 0.5 + 0.5;
             ((enemy.mesh.children[0] as THREE.Line).material as THREE.LineBasicMaterial).color.setHex(pulse > 0.5 ? COLORS.DANGER : COLORS.ENEMY);
-            enemy.mesh.scale.setScalar(THREE.MathUtils.lerp(1.5, 2.2, (enemy.depth - 0.8) * 5));
+            enemy.mesh.scale.setScalar(THREE.MathUtils.lerp(1.5, 2.5, (enemy.depth - 0.8) * 5));
           } else {
             enemy.mesh.scale.setScalar(THREE.MathUtils.lerp(0.5, 1.5, enemy.depth));
             ((enemy.mesh.children[0] as THREE.Line).material as THREE.LineBasicMaterial).color.setHex(COLORS.ENEMY);
@@ -371,7 +405,7 @@ const GameCanvas: React.FC<GameCanvasProps> = ({
       for (let i = stateRef.current.bullets.length - 1; i >= 0; i--) {
         const bullet = stateRef.current.bullets[i];
         bullet.prevDepth = bullet.depth;
-        bullet.depth -= 0.04 * delta;
+        bullet.depth -= 0.045 * delta;
         
         if (bullet.mesh) {
           const bPos = getShapePoint(bullet.lane + 0.5, sides, RADIUS, level);
@@ -389,7 +423,7 @@ const GameCanvas: React.FC<GameCanvasProps> = ({
         for (let j = stateRef.current.enemies.length - 1; j >= 0; j--) {
           const enemy = stateRef.current.enemies[j];
           if (enemy.lane === bullet.lane) {
-            const margin = 0.05;
+            const margin = 0.15;
             if (enemy.depth >= (bullet.depth - margin) && enemy.depth <= (bullet.prevDepth + margin)) {
               onScoreRef.current(100);
               spawnExplosion(enemy.mesh!.position);
@@ -411,7 +445,7 @@ const GameCanvas: React.FC<GameCanvasProps> = ({
       for (let i = stateRef.current.particles.length - 1; i >= 0; i--) {
         const p = stateRef.current.particles[i];
         p.position.add(p.velocity);
-        p.life -= 0.02 * delta;
+        p.life -= 0.025 * delta;
         p.mesh.position.copy(p.position);
         (p.mesh.material as THREE.MeshBasicMaterial).opacity = p.life;
         if (p.life <= 0) {
