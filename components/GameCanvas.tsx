@@ -4,8 +4,8 @@ import * as THREE from 'three';
 import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
-import { GameState, Enemy, Bullet, Particle } from '../types';
-import { TUBE_LENGTH, RADIUS, PLAYER_DEPTH, LEVELS, COLORS } from '../constants';
+import { GameState, Enemy, Bullet, Particle, LevelConfig } from '../types';
+import { TUBE_LENGTH, RADIUS, LEVELS, COLORS } from '../constants';
 
 interface GameCanvasProps {
   gameState: GameState;
@@ -15,10 +15,27 @@ interface GameCanvasProps {
   onLevelComplete: () => void;
 }
 
-// Internal bullet interface to track previous depth for collision detection
 interface BulletInternal extends Bullet {
   prevDepth: number;
 }
+
+const getShapePoint = (lane: number, sides: number, radius: number, level: LevelConfig) => {
+  const theta = (lane / sides) * Math.PI * 2;
+  let r = radius;
+
+  if (level.shape === 'clover') {
+    r = radius * (0.7 + 0.4 * Math.abs(Math.cos(theta * 2)));
+  } else if (level.shape === 'zigzag') {
+    const x = (lane - sides / 2) * (radius * 0.25);
+    const y = Math.abs(lane % 4 - 2) * (radius * 0.3) - (radius * 0.5);
+    return { x, y };
+  }
+
+  return {
+    x: Math.cos(theta) * r,
+    y: Math.sin(theta) * r
+  };
+};
 
 const GameCanvas: React.FC<GameCanvasProps> = ({ 
   gameState, 
@@ -28,6 +45,12 @@ const GameCanvas: React.FC<GameCanvasProps> = ({
   onLevelComplete 
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
+  
+  // Use Refs to hold current prop values for the main animate loop to avoid stale closures
+  const onScoreRef = useRef(onScore);
+  const onLifeLostRef = useRef(onLifeLost);
+  const onLevelCompleteRef = useRef(onLevelComplete);
+  
   const stateRef = useRef({ 
     gameState, 
     levelIndex, 
@@ -44,10 +67,18 @@ const GameCanvas: React.FC<GameCanvasProps> = ({
   });
 
   useEffect(() => {
+    onScoreRef.current = onScore;
+    onLifeLostRef.current = onLifeLost;
+    onLevelCompleteRef.current = onLevelComplete;
+  }, [onScore, onLifeLost, onLevelComplete]);
+
+  useEffect(() => {
     stateRef.current.gameState = gameState;
     if (stateRef.current.levelIndex !== levelIndex) {
       stateRef.current.levelIndex = levelIndex;
       stateRef.current.superzapperAvailable = true;
+      const config = LEVELS[levelIndex];
+      stateRef.current.lane = config.isClosed ? 0 : Math.floor(config.sides / 2);
     }
   }, [gameState, levelIndex]);
 
@@ -91,17 +122,24 @@ const GameCanvas: React.FC<GameCanvasProps> = ({
       const geometry = new THREE.BufferGeometry();
       const vertices: number[] = [];
 
-      for (let i = 0; i < sides; i++) {
-        const theta = (i / sides) * Math.PI * 2;
-        const nextTheta = ((i + 1) / sides) * Math.PI * 2;
-        const x1 = Math.cos(theta) * RADIUS;
-        const y1 = Math.sin(theta) * RADIUS;
-        const x2 = Math.cos(nextTheta) * RADIUS;
-        const y2 = Math.sin(nextTheta) * RADIUS;
-        vertices.push(x1, y1, 0, x2, y2, 0);
-        vertices.push(x1 * 0.1, y1 * 0.1, -TUBE_LENGTH, x2 * 0.1, y2 * 0.1, -TUBE_LENGTH);
-        vertices.push(x1, y1, 0, x1 * 0.1, y1 * 0.1, -TUBE_LENGTH);
+      const limit = config.isClosed ? sides : sides - 1;
+
+      for (let i = 0; i <= limit; i++) {
+        const nextIdx = (i + 1) % sides;
+        if (!config.isClosed && i === limit) break;
+
+        const p1 = getShapePoint(i, sides, RADIUS, config);
+        const p2 = getShapePoint(nextIdx, sides, RADIUS, config);
+        
+        vertices.push(p1.x, p1.y, 0, p2.x, p2.y, 0);
+        vertices.push(p1.x * 0.1, p1.y * 0.1, -TUBE_LENGTH, p2.x * 0.1, p2.y * 0.1, -TUBE_LENGTH);
+        vertices.push(p1.x, p1.y, 0, p1.x * 0.1, p1.y * 0.1, -TUBE_LENGTH);
+        
+        if (!config.isClosed && i === limit - 1) {
+           vertices.push(p2.x, p2.y, 0, p2.x * 0.1, p2.y * 0.1, -TUBE_LENGTH);
+        }
       }
+
       geometry.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3));
       tubeLines = new THREE.LineSegments(geometry, new THREE.LineBasicMaterial({ color: config.color }));
       levelGroup.add(tubeLines);
@@ -167,8 +205,8 @@ const GameCanvas: React.FC<GameCanvasProps> = ({
         id: Math.random().toString(36).substr(2, 9),
         lane: Math.floor(stateRef.current.lane),
         depth: 1,
-        prevDepth: 1, // Store previous depth to check for tunneling
-        speed: 3.5, // Increased bullet speed for snappier feel
+        prevDepth: 1,
+        speed: 3.5,
         mesh
       });
     };
@@ -179,11 +217,11 @@ const GameCanvas: React.FC<GameCanvasProps> = ({
       stateRef.current.flashIntensity = 1.0;
       stateRef.current.cameraShake = 1.0;
       
-      onScore(stateRef.current.enemies.length * 50);
       stateRef.current.enemies.forEach(enemy => {
         if (enemy.mesh) {
           spawnExplosion(enemy.mesh.position, 20);
           scene.remove(enemy.mesh);
+          onScoreRef.current(100); 
         }
       });
       stateRef.current.enemies = [];
@@ -244,8 +282,16 @@ const GameCanvas: React.FC<GameCanvasProps> = ({
       const level = LEVELS[stateRef.current.levelIndex];
       const sides = level.sides;
 
-      if (keys['ArrowLeft'] || keys['KeyA']) stateRef.current.lane = (stateRef.current.lane - 0.12 * delta + sides) % sides;
-      if (keys['ArrowRight'] || keys['KeyD']) stateRef.current.lane = (stateRef.current.lane + 0.12 * delta) % sides;
+      if (keys['ArrowLeft'] || keys['KeyA']) {
+        stateRef.current.lane += 0.12 * delta;
+        if (!level.isClosed) stateRef.current.lane = Math.min(sides - 1, stateRef.current.lane);
+        else stateRef.current.lane = (stateRef.current.lane + sides) % sides;
+      }
+      if (keys['ArrowRight'] || keys['KeyD']) {
+        stateRef.current.lane -= 0.12 * delta;
+        if (!level.isClosed) stateRef.current.lane = Math.max(0, stateRef.current.lane);
+        else stateRef.current.lane = (stateRef.current.lane + sides) % sides;
+      }
       
       if (keys['Space']) spawnBullet();
       if ((keys['KeyE'] || keys['ShiftLeft'] || keys['ShiftRight'])) triggerSuperzapper();
@@ -258,14 +304,21 @@ const GameCanvas: React.FC<GameCanvasProps> = ({
         camera.position.copy(originalCameraPos);
       }
 
-      const playerTheta = (Math.floor(stateRef.current.lane) + 0.5) / sides * Math.PI * 2;
-      const targetRotation = -playerTheta - Math.PI / 2;
-      levelGroup.rotation.z = THREE.MathUtils.lerp(levelGroup.rotation.z, targetRotation, 0.1);
+      const playerPos = getShapePoint(stateRef.current.lane + 0.5, sides, RADIUS, level);
       
-      const px = Math.cos(playerTheta) * RADIUS;
-      const py = Math.sin(playerTheta) * RADIUS;
-      playerGroup.position.set(px, py, 0);
-      playerGroup.rotation.z = playerTheta + Math.PI / 2;
+      if (level.shape !== 'zigzag') {
+        const playerTheta = (stateRef.current.lane + 0.5) / sides * Math.PI * 2;
+        const targetRotation = -playerTheta - Math.PI / 2;
+        levelGroup.rotation.z = THREE.MathUtils.lerp(levelGroup.rotation.z, targetRotation, 0.1);
+      } else {
+        levelGroup.rotation.z = THREE.MathUtils.lerp(levelGroup.rotation.z, 0, 0.1);
+      }
+      
+      playerGroup.position.set(playerPos.x, playerPos.y, 0);
+      
+      const pNext = getShapePoint(stateRef.current.lane + 0.6, sides, RADIUS, level);
+      const angle = Math.atan2(pNext.y - playerPos.y, pNext.x - playerPos.x);
+      playerGroup.rotation.z = angle + Math.PI / 2;
 
       if (Math.random() < level.enemySpawnRate) spawnEnemy();
 
@@ -281,11 +334,14 @@ const GameCanvas: React.FC<GameCanvasProps> = ({
         enemy.depth += 0.003 * delta * (1 + enemy.speed);
         
         if (enemy.mesh) {
-          const enemyTheta = (enemy.lane + 0.5) / sides * Math.PI * 2;
-          const currentRadius = THREE.MathUtils.lerp(RADIUS * 0.1, RADIUS, enemy.depth);
+          const ePos = getShapePoint(enemy.lane + 0.5, sides, RADIUS, level);
+          const currentRadius = THREE.MathUtils.lerp(0.1, 1.0, enemy.depth);
           const ez = THREE.MathUtils.lerp(-TUBE_LENGTH, 0, enemy.depth);
-          enemy.mesh.position.set(Math.cos(enemyTheta) * currentRadius, Math.sin(enemyTheta) * currentRadius, ez);
-          enemy.mesh.rotation.z = enemyTheta + Math.PI / 2;
+          enemy.mesh.position.set(ePos.x * currentRadius, ePos.y * currentRadius, ez);
+          
+          const eNext = getShapePoint(enemy.lane + 0.6, sides, RADIUS, level);
+          const eAngle = Math.atan2(eNext.y - ePos.y, eNext.x - ePos.x);
+          enemy.mesh.rotation.z = eAngle + Math.PI / 2;
           
           if (enemy.depth > 0.8) {
             const pulse = Math.sin(time * 0.01) * 0.5 + 0.5;
@@ -298,7 +354,7 @@ const GameCanvas: React.FC<GameCanvasProps> = ({
         }
 
         if (enemy.depth >= 1.0) {
-          onLifeLost();
+          onLifeLostRef.current();
           stateRef.current.cameraShake = 0.5;
           if (enemy.mesh) {
             spawnExplosion(enemy.mesh.position, 30);
@@ -311,25 +367,25 @@ const GameCanvas: React.FC<GameCanvasProps> = ({
       for (let i = stateRef.current.bullets.length - 1; i >= 0; i--) {
         const bullet = stateRef.current.bullets[i];
         bullet.prevDepth = bullet.depth;
-        bullet.depth -= 0.04 * delta; // Faster bullet movement
+        bullet.depth -= 0.04 * delta;
         
         if (bullet.mesh) {
-          const bulletTheta = (bullet.lane + 0.5) / sides * Math.PI * 2;
-          const currentRadius = THREE.MathUtils.lerp(RADIUS * 0.1, RADIUS, bullet.depth);
+          const bPos = getShapePoint(bullet.lane + 0.5, sides, RADIUS, level);
+          const currentRadius = THREE.MathUtils.lerp(0.1, 1.0, bullet.depth);
           const bz = THREE.MathUtils.lerp(-TUBE_LENGTH, 0, bullet.depth);
-          bullet.mesh.position.set(Math.cos(bulletTheta) * currentRadius, Math.sin(bulletTheta) * currentRadius, bz);
-          bullet.mesh.rotation.z = bulletTheta + Math.PI / 2;
+          bullet.mesh.position.set(bPos.x * currentRadius, bPos.y * currentRadius, bz);
+          const bNext = getShapePoint(bullet.lane + 0.6, sides, RADIUS, level);
+          const bAngle = Math.atan2(bNext.y - bPos.y, bNext.x - bPos.x);
+          bullet.mesh.rotation.z = bAngle + Math.PI / 2;
         }
 
         let hit = false;
         for (let j = stateRef.current.enemies.length - 1; j >= 0; j--) {
           const enemy = stateRef.current.enemies[j];
           if (enemy.lane === bullet.lane) {
-            // Enhanced collision: check if enemy depth is between bullet's current and previous depth
-            // with a small extra margin for reliability
             const margin = 0.05;
             if (enemy.depth >= (bullet.depth - margin) && enemy.depth <= (bullet.prevDepth + margin)) {
-              onScore(100);
+              onScoreRef.current(100);
               spawnExplosion(enemy.mesh!.position);
               scene.remove(enemy.mesh!);
               scene.remove(bullet.mesh!);
@@ -340,7 +396,7 @@ const GameCanvas: React.FC<GameCanvasProps> = ({
             }
           }
         }
-        if (!hit && bullet.depth <= -0.1) { // Let it fly slightly past the tube end
+        if (!hit && bullet.depth <= -0.1) {
           scene.remove(bullet.mesh!);
           stateRef.current.bullets.splice(i, 1);
         }

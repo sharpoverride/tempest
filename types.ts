@@ -44,4 +44,7 @@ export interface LevelConfig {
   enemySpawnRate: number;
   enemySpeed: number;
   name: string;
+  shape?: 'circle' | 'clover' | 'zigzag';
+  isClosed?: boolean;
+  targetKills: number;
 }
