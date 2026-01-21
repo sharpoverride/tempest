@@ -1,6 +1,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { GameState } from '../types';
+import { LEVELS } from '../constants';
 
 interface GameOverlayProps {
   gameState: GameState;
@@ -22,6 +23,7 @@ const GameOverlay: React.FC<GameOverlayProps> = ({
   onStart 
 }) => {
   const [zapperReady, setZapperReady] = useState(true);
+  const currentLevel = LEVELS.find(l => l.name === levelName) || LEVELS[0];
 
   useEffect(() => {
     const handleZapperUsed = () => setZapperReady(false);
@@ -46,15 +48,18 @@ const GameOverlay: React.FC<GameOverlayProps> = ({
           <div className="text-xl">{score.toString().padStart(6, '0')}</div>
         </div>
         
-        <div className="text-center flex flex-col gap-2">
+        <div className="text-center flex flex-col gap-2 flex-1 mx-4">
           <div className="text-[10px] text-yellow-400">LEVEL: {levelName}</div>
-          <div className="w-48 h-2 bg-gray-900 border border-gray-700 relative overflow-hidden">
+          <div className="w-72 h-3 bg-gray-900 border border-gray-700 relative overflow-hidden mx-auto">
              <div 
-               className="h-full bg-cyan-500 shadow-[0_0_10px_#06b6d4] transition-all duration-300"
+               className="h-full bg-cyan-500 shadow-[0_0_15px_#06b6d4] transition-all duration-300"
                style={{ width: `${progress}%` }}
              />
           </div>
           <div className="text-[8px] text-cyan-300 animate-pulse">CLEARED: {progress}%</div>
+          <div className="text-[6px] text-gray-500 mt-1 uppercase max-w-[300px] leading-relaxed mx-auto">
+            {currentLevel.description}
+          </div>
         </div>
 
         <div className="flex flex-col gap-2 items-end">
@@ -71,7 +76,7 @@ const GameOverlay: React.FC<GameOverlayProps> = ({
       </div>
 
       {/* Middle HUD / Game Status */}
-      <div className="absolute top-24 left-1/2 -translate-x-1/2 flex flex-col items-center gap-2">
+      <div className="absolute top-36 left-1/2 -translate-x-1/2 flex flex-col items-center gap-2">
           <div className={`text-[8px] tracking-widest transition-opacity duration-300 ${zapperReady ? 'text-cyan-400 opacity-100' : 'text-gray-600 opacity-50'}`}>
             ZAPPER: {zapperReady ? 'READY [E]' : 'USED'}
           </div>

@@ -10,6 +10,7 @@ export const PLAYER_Z = 0;
 export const LEVELS: LevelConfig[] = [
   {
     name: "CYAN CIRCLE",
+    description: "Standard training tube. Maintain perimeter stability.",
     sides: 16,
     color: 0x00ffff,
     enemySpawnRate: 0.015,
@@ -20,7 +21,8 @@ export const LEVELS: LevelConfig[] = [
   },
   {
     name: "RED SQUARE",
-    sides: 12,
+    description: "Compressed geometry. Watch the sharp corners.",
+    sides: 4,
     color: 0xff0055,
     enemySpawnRate: 0.025,
     enemySpeed: 0.12,
@@ -30,7 +32,8 @@ export const LEVELS: LevelConfig[] = [
   },
   {
     name: "LIME HEXAGON",
-    sides: 8,
+    description: "High velocity corridor. Enemies approach rapidly.",
+    sides: 6,
     color: 0x00ff00,
     enemySpawnRate: 0.035,
     enemySpeed: 0.16,
@@ -40,10 +43,11 @@ export const LEVELS: LevelConfig[] = [
   },
   {
     name: "AMBER CLOVER",
+    description: "Complex harmonic field. 40-lane sector.",
     sides: 40,
     color: 0xffaa00,
-    enemySpawnRate: 0.028, // Reduced from 0.045 to manage 40 lanes better
-    enemySpeed: 0.15,    // Slightly reduced from 0.18
+    enemySpawnRate: 0.028,
+    enemySpeed: 0.15,
     shape: 'clover',
     isClosed: true,
     targetKills: 25
