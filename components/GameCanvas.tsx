@@ -38,6 +38,22 @@ const getShapePoint = (lane: number, sides: number, radius: number, level: Level
   };
 };
 
+/**
+ * Gets a point on the linear segment (chord) between two lane vertices.
+ * This ensures entities stay ON the visible lines of the tube.
+ */
+const getSegmentPoint = (lane: number, sides: number, radius: number, level: LevelConfig) => {
+  const laneIdx = Math.floor(lane);
+  const t = lane % 1;
+  const p1 = getShapePoint(laneIdx, sides, radius, level);
+  const p2 = getShapePoint((laneIdx + 1) % sides, sides, radius, level);
+  
+  return {
+    x: p1.x + (p2.x - p1.x) * t,
+    y: p1.y + (p2.y - p1.y) * t
+  };
+};
+
 const GameCanvas: React.FC<GameCanvasProps> = ({ 
   gameState, 
   levelIndex, 
@@ -144,12 +160,13 @@ const GameCanvas: React.FC<GameCanvasProps> = ({
 
     const playerGroup = new THREE.Group();
     // V-ARROW SHAPE: Classic Tempest claw pointing toward local (0,0,0) center
+    // Centered so wings are at Y=0 and tip is at Y=-1.8 (inward)
     const playerGeo = new THREE.BufferGeometry().setFromPoints([
-      new THREE.Vector3(-1.5, 1.8, 0),  // Wing Left
-      new THREE.Vector3(0, 0, 0),       // Tip (pointing to center)
-      new THREE.Vector3(1.5, 1.8, 0),   // Wing Right
-      new THREE.Vector3(0, 0.9, 0),     // Notch for classic V-look
-      new THREE.Vector3(-1.5, 1.8, 0)   // Close loop
+      new THREE.Vector3(-1.5, 0, 0),    // Wing Left
+      new THREE.Vector3(0, -1.8, 0),    // Tip (pointing to center)
+      new THREE.Vector3(1.5, 0, 0),     // Wing Right
+      new THREE.Vector3(0, -0.9, 0),    // Notch
+      new THREE.Vector3(-1.5, 0, 0)     // Close loop
     ]);
     const playerMesh = new THREE.Line(playerGeo, new THREE.LineBasicMaterial({ color: COLORS.PLAYER, linewidth: 2.5 }));
     playerGroup.add(playerMesh);
@@ -190,7 +207,6 @@ const GameCanvas: React.FC<GameCanvasProps> = ({
 
     const spawnBullet = () => {
       const now = Date.now();
-      // Increased fire rate to 50ms to ensure 100% coverage during full-speed rotation
       if (now - stateRef.current.lastShoot < 50) return;
       stateRef.current.lastShoot = now;
       const bulletGeo = new THREE.BoxGeometry(0.25, 0.25, 3);
@@ -289,7 +305,6 @@ const GameCanvas: React.FC<GameCanvasProps> = ({
       const level = LEVELS[stateRef.current.levelIndex % LEVELS.length];
       const sides = level.sides;
 
-      // CALIBRATION: maxVel 0.18 + shootCooldown 50ms ensures bullet hit in every lane during sweep
       const accel = 0.025 * delta;
       const friction = 0.85;
       
@@ -332,8 +347,9 @@ const GameCanvas: React.FC<GameCanvasProps> = ({
         camera.position.copy(originalCameraPos);
       }
 
+      // POSITIONS: Using getSegmentPoint (middle of lane chord)
       const currentLanePos = stateRef.current.lane + 0.5;
-      const playerPos = getShapePoint(currentLanePos, sides, RADIUS, level);
+      const playerPos = getSegmentPoint(currentLanePos, sides, RADIUS, level);
       
       if (level.isClosed) {
         const targetTheta = (currentLanePos / sides) * Math.PI * 2;
@@ -346,16 +362,14 @@ const GameCanvas: React.FC<GameCanvasProps> = ({
         levelGroup.rotation.z = THREE.MathUtils.lerp(levelGroup.rotation.z, 0, 0.02 * delta); 
       }
       
-      const deltaL = 0.001;
-      const p1 = getShapePoint(currentLanePos - deltaL, sides, RADIUS, level);
-      const p2 = getShapePoint(currentLanePos + deltaL, sides, RADIUS, level);
-      const surfaceAngle = Math.atan2(p2.y - p1.y, p2.x - p1.x);
-      
       playerGroup.position.set(playerPos.x, playerPos.y, 0);
       
-      // Orientation: Pointing inward + Banking
+      // ORIENTATION: Face the center (0,0) exactly
+      const angleToCenter = Math.atan2(-playerPos.y, -playerPos.x);
+      // Since ship is defined pointing toward Tip (at local -Y), 
+      // we align local Y axis with the vector to center.
       const bankFactor = stateRef.current.laneVelocity * 1.5;
-      playerGroup.rotation.z = surfaceAngle - Math.PI / 2 + bankFactor;
+      playerGroup.rotation.z = angleToCenter + Math.PI / 2 + bankFactor;
 
       if (Math.random() < level.enemySpawnRate) spawnEnemy();
 
@@ -371,15 +385,13 @@ const GameCanvas: React.FC<GameCanvasProps> = ({
         enemy.depth += 0.0035 * delta * (1 + enemy.speed);
         
         if (enemy.mesh) {
-          const ePos = getShapePoint(enemy.lane + 0.5, sides, RADIUS, level);
+          const ePos = getSegmentPoint(enemy.lane + 0.5, sides, RADIUS, level);
           const currentRadius = THREE.MathUtils.lerp(0.1, 1.0, enemy.depth);
           const ez = THREE.MathUtils.lerp(-TUBE_LENGTH, 0, enemy.depth);
           enemy.mesh.position.set(ePos.x * currentRadius, ePos.y * currentRadius, ez);
           
-          const e1 = getShapePoint(enemy.lane + 0.5 - deltaL, sides, RADIUS, level);
-          const e2 = getShapePoint(enemy.lane + 0.5 + deltaL, sides, RADIUS, level);
-          const eAngle = Math.atan2(e2.y - e1.y, e2.x - e1.x);
-          enemy.mesh.rotation.z = eAngle + Math.PI / 2;
+          // Enemies point "out" from center
+          enemy.mesh.rotation.z = Math.atan2(ePos.y, ePos.x) + Math.PI / 2;
           
           if (enemy.depth > 0.8) {
             const pulse = Math.sin(time * 0.015) * 0.5 + 0.5;
@@ -408,15 +420,11 @@ const GameCanvas: React.FC<GameCanvasProps> = ({
         bullet.depth -= 0.045 * delta;
         
         if (bullet.mesh) {
-          const bPos = getShapePoint(bullet.lane + 0.5, sides, RADIUS, level);
+          const bPos = getSegmentPoint(bullet.lane + 0.5, sides, RADIUS, level);
           const currentRadius = THREE.MathUtils.lerp(0.1, 1.0, bullet.depth);
           const bz = THREE.MathUtils.lerp(-TUBE_LENGTH, 0, bullet.depth);
           bullet.mesh.position.set(bPos.x * currentRadius, bPos.y * currentRadius, bz);
-          
-          const b1 = getShapePoint(bullet.lane + 0.5 - deltaL, sides, RADIUS, level);
-          const b2 = getShapePoint(bullet.lane + 0.5 + deltaL, sides, RADIUS, level);
-          const bAngle = Math.atan2(b2.y - b1.y, b2.x - b1.x);
-          bullet.mesh.rotation.z = bAngle + Math.PI / 2;
+          bullet.mesh.rotation.z = Math.atan2(bPos.y, bPos.x) + Math.PI / 2;
         }
 
         let hit = false;
