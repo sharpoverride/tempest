@@ -159,14 +159,13 @@ const GameCanvas: React.FC<GameCanvasProps> = ({
     updateLevelVisuals();
 
     const playerGroup = new THREE.Group();
-    // V-ARROW SHAPE: Classic Tempest claw pointing toward local (0,0,0) center
-    // Centered so wings are at Y=0 and tip is at Y=-1.8 (inward)
+    // V-ARROW SHAPE: Wings at local Y=0, Tip at local Y=-1.8 (pointing down/inward)
     const playerGeo = new THREE.BufferGeometry().setFromPoints([
       new THREE.Vector3(-1.5, 0, 0),    // Wing Left
-      new THREE.Vector3(0, -1.8, 0),    // Tip (pointing to center)
+      new THREE.Vector3(0, -1.8, 0),    // Tip
       new THREE.Vector3(1.5, 0, 0),     // Wing Right
       new THREE.Vector3(0, -0.9, 0),    // Notch
-      new THREE.Vector3(-1.5, 0, 0)     // Close loop
+      new THREE.Vector3(-1.5, 0, 0)     // Close
     ]);
     const playerMesh = new THREE.Line(playerGeo, new THREE.LineBasicMaterial({ color: COLORS.PLAYER, linewidth: 2.5 }));
     playerGroup.add(playerMesh);
@@ -213,6 +212,7 @@ const GameCanvas: React.FC<GameCanvasProps> = ({
       const bulletMat = new THREE.MeshBasicMaterial({ color: COLORS.BULLET });
       const mesh = new THREE.Mesh(bulletGeo, bulletMat);
       levelGroup.add(mesh);
+      // Bullets stay locked to the discrete lane center logic for hit detection
       stateRef.current.bullets.push({
         id: Math.random().toString(36).substr(2, 9),
         lane: Math.floor(stateRef.current.lane),
@@ -313,7 +313,8 @@ const GameCanvas: React.FC<GameCanvasProps> = ({
       } else if (keys['ArrowRight'] || keys['KeyD']) {
         stateRef.current.laneVelocity -= accel;
       } else {
-        const laneFraction = stateRef.current.lane % 1;
+        // Subtle bias to pull ship toward center of nearest lane when idling
+        const laneFraction = (stateRef.current.lane % 1);
         const pull = (0.5 - laneFraction) * 0.01 * delta;
         stateRef.current.laneVelocity += pull;
         stateRef.current.laneVelocity *= friction;
@@ -347,12 +348,13 @@ const GameCanvas: React.FC<GameCanvasProps> = ({
         camera.position.copy(originalCameraPos);
       }
 
-      // POSITIONS: Using getSegmentPoint (middle of lane chord)
-      const currentLanePos = stateRef.current.lane + 0.5;
-      const playerPos = getSegmentPoint(currentLanePos, sides, RADIUS, level);
+      // FLUID POSITION: Using continuous lane value for position on chord rail
+      const playerPos = getSegmentPoint(stateRef.current.lane, sides, RADIUS, level);
       
+      // Level auto-rotation follows the ship's current LBP (Logical Bin Position)
+      const currentLaneCenter = Math.floor(stateRef.current.lane) + 0.5;
       if (level.isClosed) {
-        const targetTheta = (currentLanePos / sides) * Math.PI * 2;
+        const targetTheta = (currentLaneCenter / sides) * Math.PI * 2;
         const targetRotation = Math.PI / 2 - targetTheta;
         let diff = targetRotation - levelGroup.rotation.z;
         while (diff < -Math.PI) diff += Math.PI * 2;
@@ -364,10 +366,8 @@ const GameCanvas: React.FC<GameCanvasProps> = ({
       
       playerGroup.position.set(playerPos.x, playerPos.y, 0);
       
-      // ORIENTATION: Face the center (0,0) exactly
+      // FLUID ORIENTATION: Point toward center based on continuous position
       const angleToCenter = Math.atan2(-playerPos.y, -playerPos.x);
-      // Since ship is defined pointing toward Tip (at local -Y), 
-      // we align local Y axis with the vector to center.
       const bankFactor = stateRef.current.laneVelocity * 1.5;
       playerGroup.rotation.z = angleToCenter + Math.PI / 2 + bankFactor;
 
@@ -390,7 +390,6 @@ const GameCanvas: React.FC<GameCanvasProps> = ({
           const ez = THREE.MathUtils.lerp(-TUBE_LENGTH, 0, enemy.depth);
           enemy.mesh.position.set(ePos.x * currentRadius, ePos.y * currentRadius, ez);
           
-          // Enemies point "out" from center
           enemy.mesh.rotation.z = Math.atan2(ePos.y, ePos.x) + Math.PI / 2;
           
           if (enemy.depth > 0.8) {
@@ -415,7 +414,7 @@ const GameCanvas: React.FC<GameCanvasProps> = ({
       }
 
       for (let i = stateRef.current.bullets.length - 1; i >= 0; i--) {
-        const bullet = stateRef.current.bullets[i];
+        const bullet = stateRef.current.bullets[i] as BulletInternal;
         bullet.prevDepth = bullet.depth;
         bullet.depth -= 0.045 * delta;
         
