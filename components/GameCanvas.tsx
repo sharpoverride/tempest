@@ -19,6 +19,8 @@ interface BulletInternal extends Bullet {
   prevDepth: number;
 }
 
+const ZAPPER_RECHARGE_MS = 3000;
+
 const getShapePoint = (lane: number, sides: number, radius: number, level: LevelConfig) => {
   const theta = (lane / sides) * Math.PI * 2;
   let r = radius;
@@ -38,10 +40,6 @@ const getShapePoint = (lane: number, sides: number, radius: number, level: Level
   };
 };
 
-/**
- * Gets a point on the linear segment (chord) between two lane vertices.
- * This ensures entities stay ON the visible lines of the tube.
- */
 const getSegmentPoint = (lane: number, sides: number, radius: number, level: LevelConfig) => {
   const laneIdx = Math.floor(lane);
   const t = lane % 1;
@@ -68,17 +66,20 @@ const GameCanvas: React.FC<GameCanvasProps> = ({
   const stateRef = useRef({ 
     gameState, 
     levelIndex, 
+    lastGameState: gameState,
     lane: 0,
     laneVelocity: 0,
     enemies: [] as Enemy[],
     bullets: [] as BulletInternal[],
     particles: [] as Particle[],
     lastShoot: 0,
-    superzapperAvailable: true,
+    lastZapperTime: 0,
     flashIntensity: 0,
     cameraShake: 0,
     hyperspaceZoom: 1.0,
-    currentWorldRotation: Math.PI / 2
+    currentWorldRotation: Math.PI / 2,
+    touchActive: false,
+    touchSide: null as 'left' | 'right' | null
   });
 
   useEffect(() => {
@@ -88,15 +89,11 @@ const GameCanvas: React.FC<GameCanvasProps> = ({
 
   useEffect(() => {
     stateRef.current.gameState = gameState;
-    if (stateRef.current.levelIndex !== levelIndex) {
-      stateRef.current.levelIndex = levelIndex;
-      stateRef.current.superzapperAvailable = true;
-      const config = LEVELS[levelIndex % LEVELS.length];
-      stateRef.current.lane = config.isClosed ? 0 : Math.floor(config.sides / 2);
-      stateRef.current.hyperspaceZoom = 1.0;
-      stateRef.current.laneVelocity = 0;
-    }
-  }, [gameState, levelIndex]);
+  }, [gameState]);
+
+  useEffect(() => {
+    stateRef.current.levelIndex = levelIndex;
+  }, [levelIndex]);
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -159,13 +156,12 @@ const GameCanvas: React.FC<GameCanvasProps> = ({
     updateLevelVisuals();
 
     const playerGroup = new THREE.Group();
-    // V-ARROW SHAPE: Wings at local Y=0, Tip at local Y=-1.8 (pointing down/inward)
     const playerGeo = new THREE.BufferGeometry().setFromPoints([
-      new THREE.Vector3(-1.5, 0, 0),    // Wing Left
-      new THREE.Vector3(0, -1.8, 0),    // Tip
-      new THREE.Vector3(1.5, 0, 0),     // Wing Right
-      new THREE.Vector3(0, -0.9, 0),    // Notch
-      new THREE.Vector3(-1.5, 0, 0)     // Close
+      new THREE.Vector3(-1.5, 0, 0),    
+      new THREE.Vector3(0, -1.8, 0),    
+      new THREE.Vector3(1.5, 0, 0),     
+      new THREE.Vector3(0, -0.9, 0),    
+      new THREE.Vector3(-1.5, 0, 0)     
     ]);
     const playerMesh = new THREE.Line(playerGeo, new THREE.LineBasicMaterial({ color: COLORS.PLAYER, linewidth: 2.5 }));
     playerGroup.add(playerMesh);
@@ -177,8 +173,31 @@ const GameCanvas: React.FC<GameCanvasProps> = ({
     const keys: { [key: string]: boolean } = {};
     const handleKeyDown = (e: KeyboardEvent) => keys[e.code] = true;
     const handleKeyUp = (e: KeyboardEvent) => keys[e.code] = false;
+
+    const handleTouchStart = (e: TouchEvent) => {
+      e.preventDefault();
+      const touch = e.touches[0];
+      stateRef.current.touchActive = true;
+      stateRef.current.touchSide = touch.clientX < window.innerWidth / 2 ? 'left' : 'right';
+    };
+
+    const handleTouchMove = (e: TouchEvent) => {
+      e.preventDefault();
+      const touch = e.touches[0];
+      stateRef.current.touchSide = touch.clientX < window.innerWidth / 2 ? 'left' : 'right';
+    };
+
+    const handleTouchEnd = (e: TouchEvent) => {
+      e.preventDefault();
+      stateRef.current.touchActive = false;
+      stateRef.current.touchSide = null;
+    };
+
     window.addEventListener('keydown', handleKeyDown);
     window.addEventListener('keyup', handleKeyUp);
+    window.addEventListener('touchstart', handleTouchStart, { passive: false });
+    window.addEventListener('touchmove', handleTouchMove, { passive: false });
+    window.addEventListener('touchend', handleTouchEnd, { passive: false });
 
     const spawnEnemy = () => {
       const sides = LEVELS[stateRef.current.levelIndex % LEVELS.length].sides;
@@ -200,7 +219,9 @@ const GameCanvas: React.FC<GameCanvasProps> = ({
         lane,
         depth: 0,
         speed: LEVELS[stateRef.current.levelIndex % LEVELS.length].enemySpeed,
-        mesh: group
+        mesh: group,
+        isRimWalking: false,
+        lastFlipTime: 0
       });
     };
 
@@ -212,7 +233,6 @@ const GameCanvas: React.FC<GameCanvasProps> = ({
       const bulletMat = new THREE.MeshBasicMaterial({ color: COLORS.BULLET });
       const mesh = new THREE.Mesh(bulletGeo, bulletMat);
       levelGroup.add(mesh);
-      // Bullets stay locked to the discrete lane center logic for hit detection
       stateRef.current.bullets.push({
         id: Math.random().toString(36).substr(2, 9),
         lane: Math.floor(stateRef.current.lane),
@@ -223,9 +243,11 @@ const GameCanvas: React.FC<GameCanvasProps> = ({
       });
     };
 
-    const triggerSuperzapper = () => {
-      if (!stateRef.current.superzapperAvailable) return;
-      stateRef.current.superzapperAvailable = false;
+    const triggerSuperzapper = (isFree = false) => {
+      const now = Date.now();
+      if (!isFree && now - stateRef.current.lastZapperTime < ZAPPER_RECHARGE_MS) return;
+      
+      stateRef.current.lastZapperTime = now;
       stateRef.current.flashIntensity = 1.0;
       stateRef.current.cameraShake = 1.0;
       
@@ -237,7 +259,7 @@ const GameCanvas: React.FC<GameCanvasProps> = ({
         }
       });
       stateRef.current.enemies = [];
-      window.dispatchEvent(new CustomEvent('zapperUsed'));
+      window.dispatchEvent(new CustomEvent('zapperUsed', { detail: { nextReady: now + ZAPPER_RECHARGE_MS } }));
     };
 
     const spawnExplosion = (pos: THREE.Vector3, count = 10) => {
@@ -261,17 +283,25 @@ const GameCanvas: React.FC<GameCanvasProps> = ({
       }
     };
 
-    const resetLevel = () => {
+    const resetLevelEngine = (hardReset = false) => {
       stateRef.current.enemies.forEach(e => e.mesh && levelGroup.remove(e.mesh));
       stateRef.current.bullets.forEach(b => b.mesh && levelGroup.remove(b.mesh));
       stateRef.current.particles.forEach(p => levelGroup.remove(p.mesh));
       stateRef.current.enemies = [];
       stateRef.current.bullets = [];
       stateRef.current.particles = [];
-      stateRef.current.superzapperAvailable = true;
       stateRef.current.hyperspaceZoom = 1.0;
       stateRef.current.laneVelocity = 0;
+      
+      const config = LEVELS[stateRef.current.levelIndex % LEVELS.length];
+      stateRef.current.lane = config.isClosed ? 0 : Math.floor(config.sides / 2);
+      
       updateLevelVisuals();
+      if (hardReset) {
+         stateRef.current.lastZapperTime = 0;
+      }
+      // Automaticaly zap on entry
+      triggerSuperzapper(true);
     };
 
     let frameId: number;
@@ -283,9 +313,18 @@ const GameCanvas: React.FC<GameCanvasProps> = ({
       const delta = (time - lastTime) / 16.67;
       lastTime = time;
 
+      // Detect Level Change
       if (currentLevelIdx !== stateRef.current.levelIndex) {
         currentLevelIdx = stateRef.current.levelIndex;
-        resetLevel();
+        resetLevelEngine(true);
+      }
+
+      // Detect Game Start/Retry
+      if (stateRef.current.lastGameState !== stateRef.current.gameState) {
+        if (stateRef.current.gameState === GameState.PLAYING && (stateRef.current.lastGameState === GameState.MENU || stateRef.current.lastGameState === GameState.GAMEOVER)) {
+          resetLevelEngine(stateRef.current.lastGameState === GameState.MENU);
+        }
+        stateRef.current.lastGameState = stateRef.current.gameState;
       }
 
       if (stateRef.current.gameState === GameState.LEVEL_COMPLETE) {
@@ -308,12 +347,14 @@ const GameCanvas: React.FC<GameCanvasProps> = ({
       const accel = 0.025 * delta;
       const friction = 0.85;
       
-      if (keys['ArrowLeft'] || keys['KeyA']) {
+      const isLeft = keys['ArrowLeft'] || keys['KeyA'] || (stateRef.current.touchActive && stateRef.current.touchSide === 'left');
+      const isRight = keys['ArrowRight'] || keys['KeyD'] || (stateRef.current.touchActive && stateRef.current.touchSide === 'right');
+
+      if (isLeft) {
         stateRef.current.laneVelocity += accel;
-      } else if (keys['ArrowRight'] || keys['KeyD']) {
+      } else if (isRight) {
         stateRef.current.laneVelocity -= accel;
       } else {
-        // Subtle bias to pull ship toward center of nearest lane when idling
         const laneFraction = (stateRef.current.lane % 1);
         const pull = (0.5 - laneFraction) * 0.01 * delta;
         stateRef.current.laneVelocity += pull;
@@ -337,7 +378,7 @@ const GameCanvas: React.FC<GameCanvasProps> = ({
         stateRef.current.lane = (stateRef.current.lane + sides) % sides;
       }
       
-      if (keys['Space']) spawnBullet();
+      if (keys['Space'] || stateRef.current.touchActive) spawnBullet();
       if ((keys['KeyE'] || keys['ShiftLeft'] || keys['ShiftRight'])) triggerSuperzapper();
 
       if (stateRef.current.cameraShake > 0) {
@@ -348,10 +389,9 @@ const GameCanvas: React.FC<GameCanvasProps> = ({
         camera.position.copy(originalCameraPos);
       }
 
-      // FLUID POSITION: Using continuous lane value for position on chord rail
       const playerPos = getSegmentPoint(stateRef.current.lane, sides, RADIUS, level);
+      const playerLaneIdx = Math.floor(stateRef.current.lane);
       
-      // Level auto-rotation follows the ship's current LBP (Logical Bin Position)
       const currentLaneCenter = Math.floor(stateRef.current.lane) + 0.5;
       if (level.isClosed) {
         const targetTheta = (currentLaneCenter / sides) * Math.PI * 2;
@@ -366,7 +406,6 @@ const GameCanvas: React.FC<GameCanvasProps> = ({
       
       playerGroup.position.set(playerPos.x, playerPos.y, 0);
       
-      // FLUID ORIENTATION: Point toward center based on continuous position
       const angleToCenter = Math.atan2(-playerPos.y, -playerPos.x);
       const bankFactor = stateRef.current.laneVelocity * 1.5;
       playerGroup.rotation.z = angleToCenter + Math.PI / 2 + bankFactor;
@@ -382,39 +421,68 @@ const GameCanvas: React.FC<GameCanvasProps> = ({
 
       for (let i = stateRef.current.enemies.length - 1; i >= 0; i--) {
         const enemy = stateRef.current.enemies[i];
-        enemy.depth += 0.0035 * delta * (1 + enemy.speed);
+        
+        if (!enemy.isRimWalking) {
+          enemy.depth += 0.0035 * delta * (1 + enemy.speed);
+          if (enemy.depth >= 1.0) {
+            enemy.depth = 1.0;
+            enemy.isRimWalking = true;
+            enemy.lastFlipTime = time;
+          }
+        } else {
+          if (time - (enemy.lastFlipTime || 0) > (800 / (1 + enemy.speed))) {
+            enemy.lastFlipTime = time;
+            let laneDiff = playerLaneIdx - enemy.lane;
+            if (level.isClosed) {
+              if (laneDiff > sides / 2) laneDiff -= sides;
+              if (laneDiff < -sides / 2) laneDiff += sides;
+            }
+
+            if (Math.abs(laneDiff) > 0) {
+              const move = Math.sign(laneDiff);
+              const nextLane = enemy.lane + move;
+              if (level.isClosed) {
+                enemy.lane = (nextLane + sides) % sides;
+              } else if (nextLane >= 0 && nextLane < sides) {
+                enemy.lane = nextLane;
+              }
+            }
+          }
+
+          if (enemy.lane === playerLaneIdx) {
+            onLifeLostRef.current();
+            stateRef.current.cameraShake = 0.8;
+            spawnExplosion(enemy.mesh!.position, 30);
+            levelGroup.remove(enemy.mesh!);
+            stateRef.current.enemies.splice(i, 1);
+            continue;
+          }
+        }
         
         if (enemy.mesh) {
           const ePos = getSegmentPoint(enemy.lane + 0.5, sides, RADIUS, level);
           const currentRadius = THREE.MathUtils.lerp(0.1, 1.0, enemy.depth);
           const ez = THREE.MathUtils.lerp(-TUBE_LENGTH, 0, enemy.depth);
           enemy.mesh.position.set(ePos.x * currentRadius, ePos.y * currentRadius, ez);
-          
           enemy.mesh.rotation.z = Math.atan2(ePos.y, ePos.x) + Math.PI / 2;
           
-          if (enemy.depth > 0.8) {
+          if (enemy.isRimWalking) {
+             const pulse = Math.sin(time * 0.02) * 0.5 + 0.5;
+             ((enemy.mesh.children[0] as THREE.Line).material as THREE.LineBasicMaterial).color.setHex(pulse > 0.5 ? COLORS.DANGER : COLORS.ENEMY);
+             enemy.mesh.scale.setScalar(1.8 + pulse * 0.4);
+          } else if (enemy.depth > 0.8) {
             const pulse = Math.sin(time * 0.015) * 0.5 + 0.5;
             ((enemy.mesh.children[0] as THREE.Line).material as THREE.LineBasicMaterial).color.setHex(pulse > 0.5 ? COLORS.DANGER : COLORS.ENEMY);
-            enemy.mesh.scale.setScalar(THREE.MathUtils.lerp(1.5, 2.5, (enemy.depth - 0.8) * 5));
+            enemy.mesh.scale.setScalar(THREE.MathUtils.lerp(1.5, 2.0, (enemy.depth - 0.8) * 5));
           } else {
             enemy.mesh.scale.setScalar(THREE.MathUtils.lerp(0.5, 1.5, enemy.depth));
             ((enemy.mesh.children[0] as THREE.Line).material as THREE.LineBasicMaterial).color.setHex(COLORS.ENEMY);
           }
         }
-
-        if (enemy.depth >= 1.0) {
-          onLifeLostRef.current();
-          stateRef.current.cameraShake = 0.5;
-          if (enemy.mesh) {
-            spawnExplosion(enemy.mesh.position, 20);
-            levelGroup.remove(enemy.mesh);
-          }
-          stateRef.current.enemies.splice(i, 1);
-        }
       }
 
       for (let i = stateRef.current.bullets.length - 1; i >= 0; i--) {
-        const bullet = stateRef.current.bullets[i] as BulletInternal;
+        const bullet = stateRef.current.bullets[i];
         bullet.prevDepth = bullet.depth;
         bullet.depth -= 0.045 * delta;
         
@@ -431,7 +499,8 @@ const GameCanvas: React.FC<GameCanvasProps> = ({
           const enemy = stateRef.current.enemies[j];
           if (enemy.lane === bullet.lane) {
             const margin = 0.15;
-            if (enemy.depth >= (bullet.depth - margin) && enemy.depth <= (bullet.prevDepth + margin)) {
+            const enemyDepth = enemy.isRimWalking ? 1.0 : enemy.depth;
+            if (enemyDepth >= (bullet.depth - margin) && enemyDepth <= (bullet.prevDepth + margin)) {
               onScoreRef.current(100);
               spawnExplosion(enemy.mesh!.position);
               levelGroup.remove(enemy.mesh!);
@@ -470,12 +539,15 @@ const GameCanvas: React.FC<GameCanvasProps> = ({
       cancelAnimationFrame(frameId);
       window.removeEventListener('keydown', handleKeyDown);
       window.removeEventListener('keyup', handleKeyUp);
+      window.removeEventListener('touchstart', handleTouchStart);
+      window.removeEventListener('touchmove', handleTouchMove);
+      window.removeEventListener('touchend', handleTouchEnd);
       if (containerRef.current) containerRef.current.removeChild(renderer.domElement);
       renderer.dispose();
     };
   }, []);
 
-  return <div ref={containerRef} className="w-full h-full" />;
+  return <div ref={containerRef} className="w-full h-full touch-none" />;
 };
 
 export default GameCanvas;

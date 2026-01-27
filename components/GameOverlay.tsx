@@ -11,7 +11,10 @@ interface GameOverlayProps {
   targetKills: number;
   levelName: string;
   onStart: () => void;
+  onRetry: () => void;
 }
+
+const ZAPPER_RECHARGE_MS = 3000;
 
 const GameOverlay: React.FC<GameOverlayProps> = ({ 
   gameState, 
@@ -20,24 +23,38 @@ const GameOverlay: React.FC<GameOverlayProps> = ({
   kills,
   targetKills,
   levelName,
-  onStart 
+  onStart,
+  onRetry
 }) => {
-  const [zapperReady, setZapperReady] = useState(true);
+  const [zapperPercent, setZapperPercent] = useState(100);
   const currentLevel = LEVELS.find(l => l.name === levelName) || LEVELS[0];
 
   useEffect(() => {
-    const handleZapperUsed = () => setZapperReady(false);
+    const handleZapperUsed = (e: any) => {
+      setZapperPercent(0);
+      const startTime = Date.now();
+      const endTime = e.detail?.nextReady || (startTime + ZAPPER_RECHARGE_MS);
+      
+      const interval = setInterval(() => {
+        const now = Date.now();
+        const progress = Math.min(100, ((now - startTime) / (endTime - startTime)) * 100);
+        setZapperPercent(progress);
+        if (progress >= 100) clearInterval(interval);
+      }, 50);
+    };
+
     window.addEventListener('zapperUsed', handleZapperUsed);
     return () => window.removeEventListener('zapperUsed', handleZapperUsed);
   }, []);
 
   useEffect(() => {
     if (gameState === GameState.PLAYING || gameState === GameState.LEVEL_COMPLETE) {
-      setZapperReady(true);
+      setZapperPercent(100);
     }
   }, [levelName, gameState]);
 
   const progress = Math.min(100, Math.round((kills / targetKills) * 100));
+  const zapperReady = zapperPercent >= 100;
 
   return (
     <div className="w-full h-full flex flex-col justify-between p-8 text-white font-['Press_Start_2P']">
@@ -78,11 +95,14 @@ const GameOverlay: React.FC<GameOverlayProps> = ({
       {/* Middle HUD / Game Status */}
       <div className="absolute top-36 left-1/2 -translate-x-1/2 flex flex-col items-center gap-2">
           <div className={`text-[8px] tracking-widest transition-opacity duration-300 ${zapperReady ? 'text-cyan-400 opacity-100' : 'text-gray-600 opacity-50'}`}>
-            ZAPPER: {zapperReady ? 'READY [E]' : 'USED'}
+            FREE ZAPPER: {zapperReady ? 'READY [E]' : 'RECHARGING'}
           </div>
-          {zapperReady && <div className="w-24 h-1 bg-cyan-900 overflow-hidden rounded-full">
-            <div className="h-full bg-cyan-400 shadow-[0_0_10px_#22d3ee] animate-[pulse_1.5s_infinite]" style={{ width: '100%' }}></div>
-          </div>}
+          <div className="w-32 h-1 bg-gray-900 overflow-hidden rounded-full border border-gray-800">
+            <div 
+              className={`h-full transition-all duration-75 ${zapperReady ? 'bg-cyan-400 shadow-[0_0_10px_#22d3ee] animate-pulse' : 'bg-gray-600'}`} 
+              style={{ width: `${zapperPercent}%` }}
+            />
+          </div>
       </div>
 
       {/* Main Screens */}
@@ -93,15 +113,17 @@ const GameOverlay: React.FC<GameOverlayProps> = ({
             <div className="text-[8px] mb-12 text-gray-400 space-y-4 text-left inline-block leading-relaxed">
               <p>• ARROWS / A-D : ROTATE CLAW</p>
               <p>• SPACE : FIRE VECTOR BULLETS</p>
-              <p>• E / SHIFT : SUPERZAPPER (1 PER LEVEL)</p>
+              <p>• TOUCH SIDES : MOVE & FIRE (MOBILE)</p>
+              <p>• E / SHIFT : SUPERZAPPER (RECHARGEABLE)</p>
               <p>• OBJECTIVE : KILL TARGET TO ADVANCE</p>
             </div>
             <br/>
             <button 
               onClick={onStart}
+              onTouchStart={(e) => { e.preventDefault(); onStart(); }}
               className="px-8 py-4 bg-cyan-600 hover:bg-cyan-400 text-white border-2 border-white transition-all transform hover:scale-110 active:scale-95 text-xs"
             >
-              START MISSION [SPACE]
+              START MISSION [SPACE/TAP]
             </button>
           </div>
         )}
@@ -109,12 +131,14 @@ const GameOverlay: React.FC<GameOverlayProps> = ({
         {gameState === GameState.GAMEOVER && (
           <div className="text-center bg-black/90 p-12 border-4 border-red-600 rounded-lg shadow-[0_0_30px_#dc2626]">
             <h2 className="text-3xl mb-4 text-red-500">GAME OVER</h2>
-            <div className="text-xl mb-8">FINAL SCORE: {score}</div>
+            <div className="text-xl mb-4">FINAL SCORE: {score}</div>
+            <div className="text-[10px] mb-8 text-gray-400 uppercase tracking-widest">CONTINUE AT {levelName}?</div>
             <button 
-              onClick={onStart}
+              onClick={onRetry}
+              onTouchStart={(e) => { e.preventDefault(); onRetry(); }}
               className="px-8 py-4 bg-red-800 hover:bg-red-600 text-white border-2 border-white transition-all transform hover:scale-110 active:scale-95 text-xs"
             >
-              RETRY [SPACE]
+              FREE CONTINUE [SPACE/TAP]
             </button>
           </div>
         )}
@@ -128,8 +152,8 @@ const GameOverlay: React.FC<GameOverlayProps> = ({
       </div>
 
       {/* Bottom Footer */}
-      <div className="flex justify-center text-[8px] text-gray-600 tracking-widest opacity-50">
-        ATARI INSPIRED VECTOR CORE v2.8 // ADVANCEMENT_LOGIC_ENABLED
+      <div className="flex justify-center text-[8px] text-gray-600 tracking-widest opacity-50 uppercase">
+        VECTOR CORE v2.9 // RECHARGEABLE_ZAPPER_ENHANCEMENT
       </div>
     </div>
   );

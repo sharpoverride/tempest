@@ -21,6 +21,8 @@ export interface Enemy {
   depth: number; // 0 to 1, where 1 is close to player
   speed: number;
   mesh?: THREE.Group;
+  isRimWalking?: boolean;
+  lastFlipTime?: number;
 }
 
 export interface Bullet {

@@ -20,24 +20,50 @@ const App: React.FC = () => {
     setGameState(GameState.PLAYING);
   }, []);
 
-  // Handle Level Advancement logic via Effect to ensure it sees the latest kills/state
+  const retryLevel = useCallback(() => {
+    // Retry acts as a free zapper/continue: 
+    // Keep score and kills, just reset lives and clear the screen
+    setLives(3);
+    setGameState(GameState.PLAYING);
+  }, []);
+
+  // Handle Level Advancement logic
   useEffect(() => {
-    if (gameState === GameState.PLAYING && kills >= LEVELS[levelIndex].targetKills) {
+    const currentLevel = LEVELS[levelIndex % LEVELS.length];
+    if (gameState === GameState.PLAYING && kills >= currentLevel.targetKills) {
       handleLevelComplete();
     }
   }, [kills, gameState, levelIndex]);
 
   useEffect(() => {
-    const handleGlobalKeyDown = (e: KeyboardEvent) => {
-      if (gameState === GameState.MENU || gameState === GameState.GAMEOVER) {
-        if (e.code === 'Space' || e.code === 'Enter') {
+    const handleGlobalInput = (e: KeyboardEvent | TouchEvent) => {
+      if (gameState === GameState.MENU) {
+        if (e instanceof KeyboardEvent) {
+          if (e.code === 'Space' || e.code === 'Enter') {
+            startGame();
+          }
+        } else if (e instanceof TouchEvent) {
           startGame();
+        }
+      } else if (gameState === GameState.GAMEOVER) {
+        if (e instanceof KeyboardEvent) {
+          if (e.code === 'Space' || e.code === 'Enter') {
+            retryLevel();
+          }
+        } else if (e instanceof TouchEvent) {
+          retryLevel();
         }
       }
     };
-    window.addEventListener('keydown', handleGlobalKeyDown);
-    return () => window.removeEventListener('keydown', handleGlobalKeyDown);
-  }, [gameState, startGame]);
+    
+    window.addEventListener('keydown', handleGlobalInput as EventListener);
+    window.addEventListener('touchstart', handleGlobalInput as EventListener);
+    
+    return () => {
+      window.removeEventListener('keydown', handleGlobalInput as EventListener);
+      window.removeEventListener('touchstart', handleGlobalInput as EventListener);
+    };
+  }, [gameState, startGame, retryLevel]);
 
   const handleGameOver = () => {
     setGameState(GameState.GAMEOVER);
@@ -90,9 +116,10 @@ const App: React.FC = () => {
           score={score}
           lives={lives}
           kills={kills}
-          targetKills={LEVELS[levelIndex].targetKills}
-          levelName={LEVELS[levelIndex].name}
+          targetKills={LEVELS[levelIndex % LEVELS.length].targetKills}
+          levelName={LEVELS[levelIndex % LEVELS.length].name}
           onStart={startGame}
+          onRetry={retryLevel}
         />
       </div>
 

@@ -51,6 +51,39 @@ export const LEVELS: LevelConfig[] = [
     shape: 'clover',
     isClosed: true,
     targetKills: 25
+  },
+  {
+    name: "CRIMSON DELTA",
+    description: "Extreme angularity. Enemies cluster in corners.",
+    sides: 3,
+    color: 0xef4444,
+    enemySpawnRate: 0.045,
+    enemySpeed: 0.20,
+    shape: 'circle',
+    isClosed: true,
+    targetKills: 35
+  },
+  {
+    name: "COBALT PIPELINE",
+    description: "Open semi-conduit. Maximum velocity environment.",
+    sides: 20,
+    color: 0x3b82f6,
+    enemySpawnRate: 0.050,
+    enemySpeed: 0.22,
+    shape: 'circle',
+    isClosed: false,
+    targetKills: 40
+  },
+  {
+    name: "HYPER WEB",
+    description: "Final sequence. Reality begins to fractalize.",
+    sides: 64,
+    color: 0xffffff,
+    enemySpawnRate: 0.060,
+    enemySpeed: 0.25,
+    shape: 'clover',
+    isClosed: true,
+    targetKills: 50
   }
 ];
 
